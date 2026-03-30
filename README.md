@@ -31,11 +31,40 @@ This bot uses **environment variables** for secrets:
 
 5. Make sure `.env` remains in `.gitignore` so it is **never committed**.
 
+# Python version (pyenv)
+
+This project is standardized on **Python 3.11**.
+
+For reproducible local setups, use `pyenv`:
+
+1. Install pyenv: https://github.com/pyenv/pyenv
+2. Install Python 3.11 (latest patch managed by pyenv):
+   - `pyenv install 3.11`
+3. This repository includes a `.python-version` file set to `3.11`.
+   - When you are in this project directory, pyenv will automatically select Python 3.11.
+4. Verify interpreter version:
+   - `python --version`
+
+> Contributor note: keep `.python-version` tracked in git so all contributors use the same major/minor runtime line (`3.11`) while pyenv handles patch updates.
+
 # How to run
 
 1. ffmpeg must be installed on your PC. Download from -> https://www.ffmpeg.org/download.html
-2. Install the libraries in requirements.txt by doing `pip install -r requirements.txt`
-3. Execute main.py
+2. Initialize local development environment:
+   - `make bootstrap`
+3. Run the bot:
+   - `make run`
+
+## Makefile targets
+
+- `make help` - show available targets
+- `make check-python` - verify active interpreter is Python 3.11
+- `make bootstrap` - create `.venv`, upgrade pip, install `requirements.txt`
+- `make install` - refresh dependencies in existing `.venv`
+- `make run` - start bot using `.venv/bin/python`
+- `make clean` - remove local virtual environment and caches
+
+> Manual setup remains valid if needed: create `.venv`, install from `requirements.txt`, then run `python main.py`.
 
 # License
 
