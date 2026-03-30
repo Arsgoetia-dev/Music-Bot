@@ -1,8 +1,11 @@
 import asyncio
+import copy
 import logging
 import random
 import re
 from typing import Optional, Dict, List, Set
+
+import yt_dlp
 
 from config import MAX_PLAYLIST_SIZE
 from models.song import Song
@@ -13,6 +16,50 @@ logger = logging.getLogger(__name__)
 class MusicService:
     def __init__(self, bot):
         self.bot = bot
+
+    @staticmethod
+    def _has_playable_media_format(data: Optional[Dict]) -> bool:
+        if not data:
+            return False
+
+        direct_url = data.get("url")
+        ext = data.get("ext")
+        if direct_url and ext != "mhtml":
+            return True
+
+        formats = data.get("formats") or []
+        for fmt in formats:
+            if not isinstance(fmt, dict):
+                continue
+            if fmt.get("ext") == "mhtml":
+                continue
+            if fmt.get("protocol") == "mhtml":
+                continue
+            if fmt.get("acodec") and fmt.get("acodec") != "none":
+                return True
+
+        return False
+
+    async def _extract_info_with_temp_options(
+            self,
+            url_or_query: str,
+            override_options: Dict,
+            use_metadata_extractor: bool,
+    ) -> Optional[Dict]:
+        loop = asyncio.get_running_loop()
+
+        def _extract():
+            base_options = (
+                self.bot.ytdl_metadata_format_options
+                if use_metadata_extractor
+                else self.bot.ytdl_format_options
+            )
+            temp_options = copy.deepcopy(base_options)
+            temp_options.update(override_options)
+            with yt_dlp.YoutubeDL(temp_options) as temp_ytdl:
+                return temp_ytdl.extract_info(url_or_query, download=False)
+
+        return await loop.run_in_executor(self.bot.executor, _extract)
 
     @staticmethod
     def _normalize_youtube_entry(entry: Dict) -> Optional[Dict]:
@@ -56,7 +103,7 @@ class MusicService:
                 logger.debug(f"Using cached data for: {url_or_query[:50]}")
                 return cached_data["data"]
 
-        data = await self.get_song_info(url_or_query)
+        data = await self.get_song_info(url_or_query, use_metadata_extractor=True)
 
         if data:
             current_time = asyncio.get_running_loop().time()
@@ -76,50 +123,178 @@ class MusicService:
 
             logger.debug(f"Cleaned cache, now has {len(self.bot.song_cache)} entries")
 
-    async def get_song_info(self, url_or_query: str) -> Optional[Dict]:
+    async def get_song_info(self, url_or_query: str, use_metadata_extractor: bool = False) -> Optional[Dict]:
         try:
             loop = asyncio.get_running_loop()
+            is_direct_url = any(
+                platform in url_or_query.lower()
+                for platform in [
+                    "youtube.com",
+                    "youtu.be",
+                    "soundcloud.com",
+                    "spotify.com",
+                ]
+            )
 
-            if any(
-                    platform in url_or_query.lower()
-                    for platform in [
-                        "youtube.com",
-                        "youtu.be",
-                        "soundcloud.com",
-                        "spotify.com",
-                    ]
-            ):
+            logger.debug(
+                "get_song_info called: input=%s..., direct_url=%s, use_metadata_extractor=%s",
+                url_or_query[:120],
+                is_direct_url,
+                use_metadata_extractor,
+            )
+
+            if is_direct_url:
                 if "spotify.com" in url_or_query and self.bot.spotify:
                     return await self.handle_spotify_url(url_or_query)
                 else:
+                    extractor = self.bot.ytdl_metadata if use_metadata_extractor else self.bot.ytdl
+
+                    last_error = None
+
                     for attempt in range(2):
                         try:
+                            logger.debug(
+                                "yt-dlp extract attempt=%s format=%s extract_flat=%s input=%s...",
+                                attempt + 1,
+                                (
+                                    self.bot.ytdl_metadata_format_options.get("format")
+                                    if use_metadata_extractor
+                                    else self.bot.ytdl_format_options.get("format")
+                                ),
+                                (
+                                    self.bot.ytdl_metadata_format_options.get("extract_flat")
+                                    if use_metadata_extractor
+                                    else self.bot.ytdl_format_options.get("extract_flat")
+                                ),
+                                url_or_query[:120],
+                            )
                             data = await loop.run_in_executor(
                                 self.bot.executor,
-                                lambda: self.bot.ytdl.extract_info(
+                                lambda: extractor.extract_info(
                                     url_or_query, download=False
                                 ),
                             )
-                            if data:
+
+                            if data and self._has_playable_media_format(data):
+                                logger.debug(
+                                    "yt-dlp extract success: id=%s title=%s has_url=%s has_formats=%s extractor=%s",
+                                    data.get("id"),
+                                    (data.get("title") or "")[:100],
+                                    bool(data.get("url")),
+                                    bool(data.get("formats")),
+                                    data.get("extractor_key"),
+                                )
                                 return data
+
+                            logger.warning(
+                                "yt-dlp extract returned no playable media formats attempt=%s id=%s title=%s",
+                                attempt + 1,
+                                data.get("id") if data else None,
+                                (data.get("title") or "")[:100] if data else None,
+                            )
                         except Exception as e:
-                            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+                            last_error = e
+                            logger.warning(
+                                "yt-dlp extract failed attempt=%s err_type=%s err=%s input=%s...",
+                                attempt + 1,
+                                type(e).__name__,
+                                e,
+                                url_or_query[:120],
+                            )
+
+                            if "Requested format is not available" in str(e):
+                                logger.warning(
+                                    "Format availability diagnostic: configured_format=%s player_client=%s cookiefile=%s",
+                                    (
+                                        self.bot.ytdl_metadata_format_options.get("format")
+                                        if use_metadata_extractor
+                                        else self.bot.ytdl_format_options.get("format")
+                                    ),
+                                    (
+                                        self.bot.ytdl_metadata_format_options
+                                        if use_metadata_extractor
+                                        else self.bot.ytdl_format_options
+                                    )
+                                    .get("extractor_args", {})
+                                    .get("youtube", {})
+                                    .get("player_client"),
+                                    (
+                                        self.bot.ytdl_metadata_format_options.get("cookiefile")
+                                        if use_metadata_extractor
+                                        else self.bot.ytdl_format_options.get("cookiefile")
+                                    ),
+                                )
+
                             if attempt < 1:
                                 await asyncio.sleep(1)
+
+                    fallback_profiles = [
+                        {"youtube": {"player_client": ["android"]}},
+                        {"youtube": {"player_client": ["web"]}},
+                    ]
+
+                    for profile in fallback_profiles:
+                        try:
+                            logger.warning(
+                                "Primary extraction yielded no playable media; retrying with fallback extractor_args.youtube=%s",
+                                profile.get("youtube"),
+                            )
+
+                            fallback_data = await self._extract_info_with_temp_options(
+                                url_or_query,
+                                {"extractor_args": profile},
+                                use_metadata_extractor=use_metadata_extractor,
+                            )
+
+                            if fallback_data and self._has_playable_media_format(fallback_data):
+                                logger.warning(
+                                    "Fallback extraction succeeded: profile=%s id=%s title=%s has_url=%s",
+                                    profile.get("youtube"),
+                                    fallback_data.get("id"),
+                                    (fallback_data.get("title") or "")[:100],
+                                    bool(fallback_data.get("url")),
+                                )
+                                return fallback_data
+
+                            logger.warning(
+                                "Fallback extraction returned no playable media: profile=%s id=%s title=%s",
+                                profile.get("youtube"),
+                                fallback_data.get("id") if fallback_data else None,
+                                (fallback_data.get("title") or "")[:100] if fallback_data else None,
+                            )
+                        except Exception as fallback_error:
+                            last_error = fallback_error
+                            logger.warning(
+                                "Fallback extraction failed: profile=%s err_type=%s err=%s",
+                                profile.get("youtube"),
+                                type(fallback_error).__name__,
+                                fallback_error,
+                            )
+
+                    if last_error:
+                        logger.error(
+                            "All extraction paths failed for input=%s... last_error=%s",
+                            url_or_query[:120],
+                            last_error,
+                        )
             else:
-                data = await self.search_youtube(url_or_query)
+                data = await self.search_youtube(
+                    url_or_query,
+                    use_metadata_extractor=use_metadata_extractor,
+                )
 
             return data
         except Exception as e:
             logger.error(f"Error getting song info: {e}")
         return None
 
-    async def search_youtube(self, query: str) -> Optional[Dict]:
+    async def search_youtube(self, query: str, use_metadata_extractor: bool = True) -> Optional[Dict]:
         try:
             loop = asyncio.get_running_loop()
+            extractor = self.bot.ytdl_metadata if use_metadata_extractor else self.bot.ytdl
             data = await loop.run_in_executor(
                 self.bot.executor,
-                lambda: self.bot.ytdl.extract_info(f"ytsearch:{query}", download=False),
+                lambda: extractor.extract_info(f"ytsearch:{query}", download=False),
             )
 
             if data and "entries" in data and data["entries"]:

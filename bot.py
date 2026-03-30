@@ -3,6 +3,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import shutil
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional, Dict
@@ -42,7 +43,8 @@ class MusicBot(commands.Bot):
         self.db_save_tasks = {}
 
         self.ytdl_format_options = {
-            "format": "bestaudio[ext=m4a]/bestaudio[abr<=128]/bestaudio/best",
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "verbose": True,
             "outtmpl": "%(extractor)s-%(id)s-%(title)s.%(ext)s",
             "restrictfilenames": True,
             "noplaylist": False,
@@ -78,11 +80,19 @@ class MusicBot(commands.Bot):
             "playliststart": 1,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web", "mweb"],
-                    "player_skip": ["webpage"],
+                    "player_client": ["android", "web"],
                 }
             },
         }
+
+        node_runtime_path = self._resolve_node_runtime_path()
+        if node_runtime_path:
+            self.ytdl_format_options["js_runtimes"] = {
+                "node": {"path": node_runtime_path}
+            }
+            logger.info(f"yt-dlp node runtime detected at: {node_runtime_path}")
+        else:
+            logger.warning("No node runtime detected for yt-dlp js_runtimes; continuing without explicit node path")
 
         self.ffmpeg_options = {
             "before_options": (
@@ -108,6 +118,33 @@ class MusicBot(commands.Bot):
         self.voice_reconnect_delay = 2
 
         self.ytdl = yt_dlp.YoutubeDL(self.ytdl_format_options)
+
+        self.ytdl_metadata_format_options = dict(self.ytdl_format_options)
+        self.metadata_cookiefile = "./cookies.txt"
+
+        if os.path.isfile(self.metadata_cookiefile):
+            self.ytdl_metadata_format_options["cookiefile"] = self.metadata_cookiefile
+            self.ytdl_metadata = yt_dlp.YoutubeDL(self.ytdl_metadata_format_options)
+            logger.info(f"yt-dlp metadata extractor cookies enabled: {self.metadata_cookiefile}")
+        else:
+            self.ytdl_metadata = self.ytdl
+            logger.warning(
+                f"yt-dlp metadata extractor cookies disabled (file not found): {self.metadata_cookiefile}"
+            )
+
+        logger.info(
+            "yt-dlp playback options initialized: format=%s, extract_flat=%s, player_client=%s, cookiefile=%s",
+            self.ytdl_format_options.get("format"),
+            self.ytdl_format_options.get("extract_flat"),
+            self.ytdl_format_options.get("extractor_args", {})
+            .get("youtube", {})
+            .get("player_client"),
+            self.ytdl_format_options.get("cookiefile"),
+        )
+        logger.info(
+            "yt-dlp metadata options initialized: cookiefile=%s",
+            self.ytdl_metadata_format_options.get("cookiefile"),
+        )
 
         try:
             spotify_client_id = os.getenv("SPOTIFY_CLIENT_ID")
@@ -143,6 +180,38 @@ class MusicBot(commands.Bot):
         except Exception as e:
             self.lastfm = None
             logger.warning(f"Last.fm setup failed: {e}")
+
+    @staticmethod
+    def _resolve_node_runtime_path() -> Optional[str]:
+        explicit_path = os.getenv("YTDLP_NODE_PATH")
+        if explicit_path and os.path.isfile(explicit_path) and os.access(explicit_path, os.X_OK):
+            return explicit_path
+
+        nvm_bin = os.getenv("NVM_BIN")
+        if nvm_bin:
+            nvm_candidate = os.path.join(nvm_bin, "node")
+            if os.path.isfile(nvm_candidate) and os.access(nvm_candidate, os.X_OK):
+                return nvm_candidate
+
+        for binary_name in ("node", "nodejs"):
+            discovered = shutil.which(binary_name)
+            if discovered:
+                return discovered
+
+        nvm_dir = os.getenv("NVM_DIR", os.path.join(os.path.expanduser("~"), ".nvm"))
+        versions_dir = os.path.join(nvm_dir, "versions", "node")
+
+        if os.path.isdir(versions_dir):
+            try:
+                version_names = sorted(os.listdir(versions_dir), reverse=True)
+                for version_name in version_names:
+                    candidate = os.path.join(versions_dir, version_name, "bin", "node")
+                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                        return candidate
+            except OSError:
+                pass
+
+        return None
 
     @staticmethod
     def init_database():

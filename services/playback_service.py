@@ -291,9 +291,29 @@ class PlaybackService:
 
         for attempt in range(max_retries):
             try:
-                logger.info(f"Extracting fresh stream URL for: {song.title} (attempt {attempt + 1})")
+                logger.info(
+                    "Extracting fresh stream URL for: title=%s attempt=%s/%s guild=%s skip_count=%s webpage_url=%s",
+                    song.title,
+                    attempt + 1,
+                    max_retries,
+                    guild_id,
+                    skip_count,
+                    song.webpage_url,
+                )
 
                 fresh_data = await self.bot.get_song_info(song.webpage_url)
+
+                if fresh_data:
+                    logger.debug(
+                        "Fresh extraction payload: id=%s extractor=%s has_url=%s has_formats=%s is_live=%s format_id=%s protocol=%s",
+                        fresh_data.get("id"),
+                        fresh_data.get("extractor_key"),
+                        bool(fresh_data.get("url")),
+                        bool(fresh_data.get("formats")),
+                        fresh_data.get("is_live"),
+                        fresh_data.get("format_id"),
+                        fresh_data.get("protocol"),
+                    )
 
                 if not fresh_data or not fresh_data.get("url"):
                     raise Exception(f"No stream URL available for {song.title}")

@@ -1,0 +1,6 @@
+node_modules/
+
+cookies.txt
+*.jpg
+*.png
+*.sh
