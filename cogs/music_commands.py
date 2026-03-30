@@ -268,7 +268,8 @@ class MusicCommands(commands.Cog):
                     )
 
                     fresh_data = await self.bot.get_song_info_cached(
-                        current_song.webpage_url
+                        current_song.webpage_url,
+                        purpose="playback",
                     )
 
                     if not fresh_data or not fresh_data.get("url"):
@@ -498,7 +499,10 @@ class MusicCommands(commands.Cog):
                 await interaction.edit_original_response(embed=embed)
 
             else:
-                song_data = await self.bot.get_song_info_cached(query)
+                song_data = await self.bot.get_song_info_cached(
+                    query,
+                    purpose="metadata",
+                )
 
                 if not song_data:
                     embed = create_embed(
@@ -1525,7 +1529,8 @@ class MusicCommands(commands.Cog):
             for attempt in range(3):
                 try:
                     fresh_data = await self.bot.get_song_info_cached(
-                        current_song.webpage_url
+                        current_song.webpage_url,
+                        purpose="playback",
                     )
                     if fresh_data and fresh_data.get("url"):
                         break

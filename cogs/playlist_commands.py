@@ -252,7 +252,10 @@ class PlaylistCommands(commands.Cog):
                 return
 
             elif is_spotify_playlist or is_spotify_album:
-                spotify_songs = await self.bot.get_song_info_cached(song)
+                spotify_songs = await self.bot.get_song_info_cached(
+                    song,
+                    purpose="metadata",
+                )
 
                 if not spotify_songs or not isinstance(spotify_songs, list):
                     embed = create_embed(
@@ -320,7 +323,10 @@ class PlaylistCommands(commands.Cog):
                 await interaction.followup.send(embed=embed)
                 return
 
-            song_info = await self.bot.get_song_info_cached(song)
+            song_info = await self.bot.get_song_info_cached(
+                song,
+                purpose="metadata",
+            )
             if not song_info or not song_info.get("webpage_url"):
                 embed = create_embed(
                     "Error", "Could not find that song", COLOR, self.bot.user

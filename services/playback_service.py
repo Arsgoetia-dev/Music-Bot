@@ -301,7 +301,10 @@ class PlaybackService:
                     song.webpage_url,
                 )
 
-                fresh_data = await self.bot.get_song_info(song.webpage_url)
+                fresh_data = await self.bot.get_song_info(
+                    song.webpage_url,
+                    purpose="playback",
+                )
 
                 if fresh_data:
                     logger.debug(

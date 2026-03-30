@@ -6,7 +6,7 @@ import os
 import shutil
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, Literal
 
 import discord
 import pylast
@@ -769,13 +769,21 @@ class MusicBot(commands.Bot):
         except Exception as e:
             logger.error(f"Failed to clear guild queue from database: {e}")
 
-    async def get_song_info_cached(self, url_or_query: str) -> Optional[Dict]:
+    async def get_song_info_cached(
+            self,
+            url_or_query: str,
+            purpose: Literal["metadata", "playback"] = "metadata",
+    ) -> Optional[Dict]:
         music_service = MusicService(self)
-        return await music_service.get_song_info_cached(url_or_query)
+        return await music_service.get_song_info_cached(url_or_query, purpose=purpose)
 
-    async def get_song_info(self, url_or_query: str) -> Optional[Dict]:
+    async def get_song_info(
+            self,
+            url_or_query: str,
+            purpose: Literal["metadata", "playback"] = "playback",
+    ) -> Optional[Dict]:
         music_service = MusicService(self)
-        return await music_service.get_song_info(url_or_query)
+        return await music_service.get_song_info(url_or_query, purpose=purpose)
 
     async def close(self):
         logger.info("Shutting down bot...")

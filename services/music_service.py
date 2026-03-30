@@ -1,9 +1,10 @@
 import asyncio
 import copy
+import inspect
 import logging
 import random
 import re
-from typing import Optional, Dict, List, Set
+from typing import Optional, Dict, List, Set, Literal
 
 import yt_dlp
 
@@ -93,8 +94,12 @@ class MusicService:
 
         return normalized
 
-    async def get_song_info_cached(self, url_or_query: str) -> Optional[Dict]:
-        cache_key = url_or_query.lower().strip()
+    async def get_song_info_cached(
+            self,
+            url_or_query: str,
+            purpose: Literal["metadata", "playback"] = "metadata",
+    ) -> Optional[Dict]:
+        cache_key = f"{purpose}:{url_or_query.lower().strip()}"
 
         if cache_key in self.bot.song_cache:
             cached_data = self.bot.song_cache[cache_key]
@@ -103,7 +108,7 @@ class MusicService:
                 logger.debug(f"Using cached data for: {url_or_query[:50]}")
                 return cached_data["data"]
 
-        data = await self.get_song_info(url_or_query, use_metadata_extractor=True)
+        data = await self.get_song_info(url_or_query, purpose=purpose)
 
         if data:
             current_time = asyncio.get_running_loop().time()
@@ -123,9 +128,14 @@ class MusicService:
 
             logger.debug(f"Cleaned cache, now has {len(self.bot.song_cache)} entries")
 
-    async def get_song_info(self, url_or_query: str, use_metadata_extractor: bool = False) -> Optional[Dict]:
+    async def get_song_info(
+            self,
+            url_or_query: str,
+            purpose: Literal["metadata", "playback"] = "playback",
+    ) -> Optional[Dict]:
         try:
             loop = asyncio.get_running_loop()
+            use_metadata_extractor = purpose == "metadata"
             is_direct_url = any(
                 platform in url_or_query.lower()
                 for platform in [
@@ -137,15 +147,56 @@ class MusicService:
             )
 
             logger.debug(
-                "get_song_info called: input=%s..., direct_url=%s, use_metadata_extractor=%s",
+                "get_song_info called: input=%s..., direct_url=%s, purpose=%s, use_metadata_extractor=%s",
                 url_or_query[:120],
                 is_direct_url,
+                purpose,
                 use_metadata_extractor,
             )
 
             if is_direct_url:
+                logger.warning(
+                    "Direct URL extraction start: purpose=%s use_metadata_extractor=%s input=%s",
+                    purpose,
+                    use_metadata_extractor,
+                    url_or_query[:120],
+                )
+
                 if "spotify.com" in url_or_query and self.bot.spotify:
                     return await self.handle_spotify_url(url_or_query)
+                elif purpose == "metadata":
+                    extractor = self.bot.ytdl_metadata
+
+                    for attempt in range(2):
+                        try:
+                            logger.debug(
+                                "Metadata direct extraction attempt=%s input=%s...",
+                                attempt + 1,
+                                url_or_query[:120],
+                            )
+                            data = await loop.run_in_executor(
+                                self.bot.executor,
+                                lambda: extractor.extract_info(
+                                    url_or_query,
+                                    download=False,
+                                    process=False,
+                                ),
+                            )
+
+                            if data:
+                                normalized = self._normalize_youtube_entry(data)
+                                if normalized:
+                                    return normalized
+                                return data
+                        except Exception as e:
+                            logger.warning(
+                                "Metadata direct extraction failed attempt=%s err_type=%s err=%s",
+                                attempt + 1,
+                                type(e).__name__,
+                                e,
+                            )
+                            if attempt < 1:
+                                await asyncio.sleep(0.5)
                 else:
                     extractor = self.bot.ytdl_metadata if use_metadata_extractor else self.bot.ytdl
 
